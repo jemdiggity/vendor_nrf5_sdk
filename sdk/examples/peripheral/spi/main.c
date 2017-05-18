@@ -71,8 +71,8 @@ static const nrf_drv_spi_t spi = NRF_DRV_SPI_INSTANCE(SPI_INSTANCE);  /**< SPI i
 static volatile bool spi_xfer_done;  /**< Flag used to indicate that SPI instance completed the transfer. */
 
 #define TEST_STRING "Nordic"
-static uint8_t       m_tx_buf[] = TEST_STRING;           /**< TX buffer. */
-static uint8_t       m_rx_buf[sizeof(TEST_STRING) + 1];    /**< RX buffer. */
+static uint8_t       m_tx_buf[] = {/*power up*/0x00, 0x0F, /*read*/0x00, 0x00, /*CS high delay*/0xFF, /*power down*/0x3F, 0xFF};           /**< TX buffer. */
+static uint8_t       m_rx_buf[7 + 1];    /**< RX buffer. */
 static const uint8_t m_length = sizeof(m_tx_buf);        /**< Transfer length. */
 
 /**
@@ -127,7 +127,7 @@ static void rtc_config(void)
 
     //Initialize RTC instance
     nrf_drv_rtc_config_t config = NRF_DRV_RTC_DEFAULT_CONFIG;
-    config.prescaler = 1023;
+    config.prescaler = 6;
     err_code = nrf_drv_rtc_init(&rtc, &config, rtc_handler);
     APP_ERROR_CHECK(err_code);
 
@@ -146,11 +146,12 @@ int main(void)
 {
     bsp_board_leds_init();
 
-    APP_ERROR_CHECK(NRF_LOG_INIT(NULL));
+    // APP_ERROR_CHECK(NRF_LOG_INIT(NULL));
 
-    NRF_LOG_INFO("SPI example\r\n");
+    // NRF_LOG_INFO("SPI example\r\n");
 
     nrf_drv_spi_config_t spi_config = NRF_DRV_SPI_DEFAULT_CONFIG;
+    spi_config.frequency = NRF_DRV_SPI_FREQ_8M;
     spi_config.ss_pin   = SPI_SS_PIN;
     spi_config.miso_pin = SPI_MISO_PIN;
     spi_config.mosi_pin = SPI_MOSI_PIN;
@@ -169,7 +170,6 @@ int main(void)
             __SEV();
             __WFE();
             __WFE();
-
         }
     }
 }
