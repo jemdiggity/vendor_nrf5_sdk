@@ -65,7 +65,11 @@
 #include "app_timer.h"
 #include "bsp.h"
 #include "nrf_ble_gatt.h"
+#include "nrf_drv_spi.h"
 
+#include "app_util_platform.h"
+#include "nrf_gpio.h"
+#include "boards.h"
 
 
 #define APP_FEATURE_NOT_SUPPORTED           BLE_GATT_STATUS_ATTERR_APP_BEGIN + 2    /**< Reply when unsupported features are requested. */
@@ -76,8 +80,10 @@
 #define APP_CFG_NON_CONN_ADV_TIMEOUT  30                                            /**< Time for which the device must be advertising in non-connectable mode (in seconds). */
 #define APP_CFG_CHAR_NOTIF_TIMEOUT    5000                                          /**< Time for which the device must continue to send notifications once connected to central (in milli seconds). */
 #define APP_CFG_ADV_DATA_LEN          31                                            /**< Required length of the complete advertisement packet. This should be atleast 8 in order to accommodate flag field and other mandatory fields and one byte of manufacturer specific data. */
-#define APP_CFG_CONNECTION_INTERVAL   20                                            /**< Connection interval used by the central (in milli seconds). This application will be sending one notification per connection interval. A repeating timer will be started with timeout value equal to this value and one notification will be sent everytime this timer expires. */
-#define APP_CFG_CHAR_LEN              20                                            /**< Size of the characteristic value being notified (in bytes). */
+#define APP_CFG_CONNECTION_INTERVAL   100                                            /**< Connection interval used by the central (in milli seconds). This application will be sending one notification per connection interval. A repeating timer will be started with timeout value equal to this value and one notification will be sent everytime this timer expires. */
+#define APP_CFG_ADC_READ              10                                            /**< Connection interval used by the central (in milli seconds). This application will be sending one notification per connection interval. A repeating timer will be started with timeout value equal to this value and one notification will be sent everytime this timer expires. */
+#define APP_CFG_CHAR_LEN              1                                            /**< Size of the characteristic value being notified (in bytes). */
+
 
 // Fixed configuration parameters:
 //      The following parameters are not meant to be changed while using this application for power
@@ -136,6 +142,20 @@
 
 #define DEAD_BEEF                     0xDEADBEEF                                    /**< Value used as error code on stack dump, can be used to identify stack location on stack unwind. */
 
+#define SPI_INSTANCE  0 /**< SPI instance index. */
+static const nrf_drv_spi_t m_spi = NRF_DRV_SPI_INSTANCE(SPI_INSTANCE);  /**< SPI instance. */
+static volatile bool spi_xfer_done;  /**< Flag used to indicate that SPI instance completed the transfer. */
+
+static uint8_t       m_tx_buf[] = {/*power up*/0x00, 0x0F, /*read*/0x00, 0x00, /*CS high delay*/0xFF, /*power down*/0x3F, 0xFF};           /**< TX buffer. */
+static uint8_t       m_rx_buf[7 + 1];    /**< RX buffer. */
+static const uint8_t m_length = sizeof(m_tx_buf);        /**< Transfer length. */
+
+void spi_event_handler(nrf_drv_spi_evt_t const * p_event,
+                       void *                    p_context)
+{
+    spi_xfer_done = true;
+}
+
 /**@brief 128-bit UUID base List. */
 static const ble_uuid128_t m_base_uuid128 =
 {
@@ -155,7 +175,8 @@ static bool                     m_is_notifying_enabled = false;                 
 static nrf_ble_gatt_t           m_gatt;                                             /**< GATT module instance. */
 
 APP_TIMER_DEF(m_conn_int_timer_id);                                                 /**< Connection interval timer. */
-APP_TIMER_DEF(m_notif_timer_id);                                                    /**< Notification timer. */
+// APP_TIMER_DEF(m_notif_timer_id);                                                    /**< Notification timer. */
+APP_TIMER_DEF(m_adc_timer_id);                                                    /**< adc timer. */
 
 
 /**@brief Callback function for asserts in the SoftDevice.
@@ -209,6 +230,18 @@ static void char_notify(void)
             APP_ERROR_HANDLER(err_code);
         }
     }
+}
+
+static void read_adc(void)
+{
+  memset(m_rx_buf, 0, m_length);
+  while (!spi_xfer_done)
+  {
+    __WFE();
+  }
+
+  spi_xfer_done = false;
+  APP_ERROR_CHECK(nrf_drv_spi_transfer(&m_spi, m_tx_buf, m_length, m_rx_buf, m_length));
 }
 
 
@@ -414,20 +447,20 @@ static void service_add(void)
  * @param[in]   p_context   Pointer used for passing some arbitrary information (context) from the
  *                          app_start_timer() call to the timeout handler.
  */
-static void notif_timeout_handler(void * p_context)
-{
-    ret_code_t err_code;
+// static void notif_timeout_handler(void * p_context)
+// {
+//     ret_code_t err_code;
 
-    UNUSED_PARAMETER(p_context);
+//     UNUSED_PARAMETER(p_context);
 
-    // Stop all notifications (by stopping the timer for connection interval that triggers
-    // notifications and disconnecting from peer).
-    err_code = app_timer_stop(m_conn_int_timer_id);
-    APP_ERROR_CHECK(err_code);
+//     // Stop all notifications (by stopping the timer for connection interval that triggers
+//     // notifications and disconnecting from peer).
+//     err_code = app_timer_stop(m_conn_int_timer_id);
+//     APP_ERROR_CHECK(err_code);
 
-    err_code = sd_ble_gap_disconnect(m_conn_handle, BLE_HCI_REMOTE_USER_TERMINATED_CONNECTION);
-    APP_ERROR_CHECK(err_code);
-}
+//     err_code = sd_ble_gap_disconnect(m_conn_handle, BLE_HCI_REMOTE_USER_TERMINATED_CONNECTION);
+//     APP_ERROR_CHECK(err_code);
+// }
 
 
 /**@brief Function for handling the Connection interval timeout.
@@ -446,6 +479,12 @@ static void connection_interval_timeout_handler(void * p_context)
     char_notify();
 }
 
+static void adc_read_timeout_handler(void * p_context)
+{
+    UNUSED_PARAMETER(p_context);
+
+    read_adc();
+}
 
 /**@brief Function for starting application timers.
  *
@@ -464,7 +503,13 @@ static void application_timers_start(void)
     APP_ERROR_CHECK(err_code);
 
     // Start characteristic notification timer.
-    err_code = app_timer_start(m_notif_timer_id, CHAR_NOTIF_TIMEOUT_IN_TKS, NULL);
+    // err_code = app_timer_start(m_notif_timer_id, CHAR_NOTIF_TIMEOUT_IN_TKS, NULL);
+    // APP_ERROR_CHECK(err_code);
+
+    err_code = app_timer_start(m_adc_timer_id,
+      // APP_TIMER_TICKS(APP_CFG_ADC_READ),
+      6,
+      NULL);
     APP_ERROR_CHECK(err_code);
 }
 
@@ -475,10 +520,13 @@ static void application_timers_stop(void)
 {
     ret_code_t err_code;
 
-    err_code = app_timer_stop(m_notif_timer_id);
-    APP_ERROR_CHECK(err_code);
+    // err_code = app_timer_stop(m_notif_timer_id);
+    // APP_ERROR_CHECK(err_code);
 
     err_code = app_timer_stop(m_conn_int_timer_id);
+    APP_ERROR_CHECK(err_code);
+
+    err_code = app_timer_stop(m_adc_timer_id);
     APP_ERROR_CHECK(err_code);
 }
 
@@ -512,10 +560,15 @@ static void timers_init(void)
                                 connection_interval_timeout_handler);
     APP_ERROR_CHECK(err_code);
 
-    err_code = app_timer_create(&m_notif_timer_id,
-                                APP_TIMER_MODE_SINGLE_SHOT,
-                                notif_timeout_handler);
+    err_code = app_timer_create(&m_adc_timer_id,
+                                APP_TIMER_MODE_REPEATED,
+                                adc_read_timeout_handler);
     APP_ERROR_CHECK(err_code);
+
+    // err_code = app_timer_create(&m_notif_timer_id,
+                                // APP_TIMER_MODE_SINGLE_SHOT,
+                                // notif_timeout_handler);
+    // APP_ERROR_CHECK(err_code);
 }
 
 
@@ -736,6 +789,18 @@ static void power_manage(void)
     APP_ERROR_CHECK(err_code);
 }
 
+static void spi_init(void)
+{
+  nrf_drv_spi_config_t spi_config = NRF_DRV_SPI_DEFAULT_CONFIG;
+  spi_config.ss_pin   = SPI_SS_PIN;
+  spi_config.miso_pin = SPI_MISO_PIN;
+  spi_config.mosi_pin = SPI_MOSI_PIN;
+  spi_config.sck_pin  = SPI_SCK_PIN;
+  spi_config.frequency = NRF_DRV_SPI_FREQ_8M;
+  APP_ERROR_CHECK(nrf_drv_spi_init(&m_spi, &spi_config, spi_event_handler, NULL));
+  spi_xfer_done = true;
+}
+
 
 /**@brief Function for application main entry.
  */
@@ -747,6 +812,7 @@ int main(void)
 
     timers_init();
     buttons_init();
+    spi_init();
 
 #if BUTTONS_NUMBER > 2
     // Check button states.
