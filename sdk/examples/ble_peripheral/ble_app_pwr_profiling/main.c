@@ -70,6 +70,10 @@
 #include "app_util_platform.h"
 #include "nrf_gpio.h"
 #include "boards.h"
+#include "nrf_delay.h"
+#define NRF_LOG_MODULE_NAME "APP"
+#include "nrf_log.h"
+#include "nrf_log_ctrl.h"
 
 
 #define APP_FEATURE_NOT_SUPPORTED           BLE_GATT_STATUS_ATTERR_APP_BEGIN + 2    /**< Reply when unsupported features are requested. */
@@ -232,15 +236,40 @@ static void char_notify(void)
     }
 }
 
+static uint32_t adc_read_ticks = 0;
+static uint32_t adc_read_ticks_last = 0;
+static uint32_t adc_read_ticks_diff = 0;
+static uint32_t adc_read_ontime_count = 0;
+static uint32_t adc_read_early_count = 0;
+static uint32_t adc_read_late_count = 0;
+static uint32_t adc_read_very_early_count = 0;
+static uint32_t adc_read_very_late_count = 0;
+
 static void read_adc(void)
 {
   memset(m_rx_buf, 0, m_length);
   while (!spi_xfer_done)
   {
-    __WFE();
+    // __WFE();
   }
 
   spi_xfer_done = false;
+
+  adc_read_ticks = app_timer_cnt_get();
+  adc_read_ticks_diff = adc_read_ticks - adc_read_ticks_last;
+  adc_read_ticks_last = adc_read_ticks;
+
+  if (adc_read_ticks_diff == 6)
+    ++adc_read_ontime_count;
+  else if (adc_read_ticks_diff == 5)
+    ++adc_read_early_count;
+  else if (adc_read_ticks_diff == 7)
+    ++adc_read_late_count;
+  else if (adc_read_ticks_diff <= 5)
+    ++adc_read_very_early_count;
+  else
+    ++adc_read_very_late_count;
+
   APP_ERROR_CHECK(nrf_drv_spi_transfer(&m_spi, m_tx_buf, m_length, m_rx_buf, m_length));
 }
 
@@ -783,11 +812,11 @@ static void ble_stack_init(void)
 
 /**@brief Function for the Power manager.
  */
-static void power_manage(void)
-{
-    ret_code_t err_code = sd_app_evt_wait();
-    APP_ERROR_CHECK(err_code);
-}
+// static void power_manage(void)
+// {
+//     ret_code_t err_code = sd_app_evt_wait();
+//     APP_ERROR_CHECK(err_code);
+// }
 
 static void spi_init(void)
 {
@@ -809,6 +838,12 @@ int main(void)
     ret_code_t err_code;
     bool is_notification_mode    = false;
     bool is_non_connectable_mode = false;
+
+
+    err_code = NRF_LOG_INIT(NULL);
+    APP_ERROR_CHECK(err_code);
+
+    NRF_LOG_INFO("Foobar Mofo!\n");
 
     timers_init();
     buttons_init();
@@ -865,7 +900,9 @@ int main(void)
     // Enter main loop.
     for (;;)
     {
-        power_manage();
+      NRF_LOG_INFO("Ontime %u, Very Early %u, Early %u, Late %u, Very Late %u\r\n", adc_read_ontime_count, adc_read_very_early_count, adc_read_early_count, adc_read_late_count, adc_read_very_late_count);
+      nrf_delay_ms(10000);
+      // power_manage();
     }
 }
 
