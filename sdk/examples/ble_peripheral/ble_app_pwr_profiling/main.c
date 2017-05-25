@@ -66,7 +66,7 @@
 #include "bsp.h"
 #include "nrf_ble_gatt.h"
 #include "nrf_drv_spi.h"
-
+#include "nrf_drv_timer.h"
 #include "app_util_platform.h"
 #include "nrf_gpio.h"
 #include "boards.h"
@@ -181,7 +181,7 @@ static nrf_ble_gatt_t           m_gatt;                                         
 APP_TIMER_DEF(m_conn_int_timer_id);                                                 /**< Connection interval timer. */
 // APP_TIMER_DEF(m_notif_timer_id);                                                    /**< Notification timer. */
 APP_TIMER_DEF(m_adc_timer_id);                                                    /**< adc timer. */
-
+const nrf_drv_timer_t TIMER_LED = NRF_DRV_TIMER_INSTANCE(2);
 
 /**@brief Callback function for asserts in the SoftDevice.
  *
@@ -240,10 +240,10 @@ static uint32_t adc_read_ticks = 0;
 static uint32_t adc_read_ticks_last = 0;
 static uint32_t adc_read_ticks_diff = 0;
 static uint32_t adc_read_ontime_count = 0;
-static uint32_t adc_read_early_count = 0;
-static uint32_t adc_read_late_count = 0;
-static uint32_t adc_read_very_early_count = 0;
-static uint32_t adc_read_very_late_count = 0;
+static uint32_t jitter_a_little = 0;
+static uint32_t jitter_too_much = 0;
+static uint32_t jitter_counter = 0;
+static uint32_t jitter_running_average = 0;
 
 static void read_adc(void)
 {
@@ -255,20 +255,22 @@ static void read_adc(void)
 
   spi_xfer_done = false;
 
-  adc_read_ticks = app_timer_cnt_get();
+  adc_read_ticks = nrf_drv_timer_capture(&TIMER_LED, NRF_TIMER_CC_CHANNEL2);
   adc_read_ticks_diff = adc_read_ticks - adc_read_ticks_last;
   adc_read_ticks_last = adc_read_ticks;
+  jitter_running_average += adc_read_ticks_diff;
+  jitter_running_average /= 2;
+  ++jitter_counter;
 
-  if (adc_read_ticks_diff == 6)
+  uint32_t const k_bangon = 2930;
+  uint32_t const k_1_percent = k_bangon / 100;
+
+  if (k_bangon -  k_1_percent < adc_read_ticks_diff && adc_read_ticks_diff < k_bangon + k_1_percent)
     ++adc_read_ontime_count;
-  else if (adc_read_ticks_diff == 5)
-    ++adc_read_early_count;
-  else if (adc_read_ticks_diff == 7)
-    ++adc_read_late_count;
-  else if (adc_read_ticks_diff <= 5)
-    ++adc_read_very_early_count;
+  else if (k_bangon -  2*k_1_percent < adc_read_ticks_diff && adc_read_ticks_diff < k_bangon + 2*k_1_percent)
+    ++jitter_a_little;
   else
-    ++adc_read_very_late_count;
+    ++jitter_too_much;
 
   APP_ERROR_CHECK(nrf_drv_spi_transfer(&m_spi, m_tx_buf, m_length, m_rx_buf, m_length));
 }
@@ -830,6 +832,22 @@ static void spi_init(void)
   spi_xfer_done = true;
 }
 
+void timer_led_event_handler(nrf_timer_event_t event_type, void* p_context)
+{
+    // static uint32_t i;
+    // uint32_t led_to_invert = ((i++) % LEDS_NUMBER);
+
+    switch (event_type)
+    {
+        case NRF_TIMER_EVENT_COMPARE0:
+            // bsp_board_led_invert(led_to_invert);
+            break;
+
+        default:
+            //Do nothing.
+            break;
+    }
+}
 
 /**@brief Function for application main entry.
  */
@@ -848,6 +866,19 @@ int main(void)
     timers_init();
     buttons_init();
     spi_init();
+
+    //Configure TIMER_LED for generating simple light effect - leds on board will invert his state one after the other.
+    nrf_drv_timer_config_t timer_cfg = NRF_DRV_TIMER_DEFAULT_CONFIG;
+    timer_cfg.bit_width = 3;
+    err_code = nrf_drv_timer_init(&TIMER_LED, &timer_cfg, timer_led_event_handler);
+    APP_ERROR_CHECK(err_code);
+    // nrf_drv_timer_extended_compare(
+    //      &TIMER_LED, NRF_TIMER_CC_CHANNEL0,
+    //      nrf_drv_timer_ms_to_ticks(&TIMER_LED, 1000/*time in ms*/),
+    //      NRF_TIMER_SHORT_COMPARE0_CLEAR_MASK,
+    //      true);
+
+    nrf_drv_timer_enable(&TIMER_LED);
 
 #if BUTTONS_NUMBER > 2
     // Check button states.
@@ -900,8 +931,8 @@ int main(void)
     // Enter main loop.
     for (;;)
     {
-      NRF_LOG_INFO("Ontime %u, Very Early %u, Early %u, Late %u, Very Late %u\r\n", adc_read_ontime_count, adc_read_very_early_count, adc_read_early_count, adc_read_late_count, adc_read_very_late_count);
-      nrf_delay_ms(10000);
+      NRF_LOG_INFO("cntr %u avg %u okay %u, sml jitter %u, big jitter %u,\n", jitter_counter, jitter_running_average, adc_read_ontime_count, jitter_a_little, jitter_too_much);
+      nrf_delay_ms(1000);
       // power_manage();
     }
 }

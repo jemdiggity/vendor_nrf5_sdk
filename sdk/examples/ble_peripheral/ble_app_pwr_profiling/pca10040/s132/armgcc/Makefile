@@ -40,6 +40,7 @@ SRC_FILES += \
   $(SDK_ROOT)/components/toolchain/gcc/gcc_startup_nrf52.S \
   $(SDK_ROOT)/components/toolchain/system_nrf52.c \
   $(SDK_ROOT)/components/softdevice/common/softdevice_handler/softdevice_handler.c \
+  $(SDK_ROOT)/components/drivers_nrf/timer/nrf_drv_timer.c \
 
 # Include folders common to all targets
 INC_FOLDERS += \
