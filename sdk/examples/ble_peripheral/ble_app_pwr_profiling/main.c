@@ -239,16 +239,16 @@ static void char_notify(void)
 static uint32_t adc_read_ticks = 0;
 static uint32_t adc_read_ticks_last = 0;
 static uint32_t adc_read_ticks_diff = 0;
-static uint32_t jitter_bin_0 = 0;
-static uint32_t jitter_bin_1 = 0;
-static uint32_t jitter_bin_2 = 0;
-static uint32_t jitter_bin_3 = 0;
-static uint32_t jitter_bin_4 = 0;
-static uint32_t jitter_bin_5 = 0;
-static uint32_t jitter_bin_6 = 0;
-static uint32_t jitter_counter = 0;
-static float running_average = 0.0f;
+static uint32_t jitter_bin[7] = {0,0,0,0,0,0,0};
+static uint32_t counter = 0;
+static uint32_t ticks_sum = 0;
 static uint32_t no_jitter_counter = 0;
+static bool firstTime = true;
+uint32_t const k_bangon = 2926;
+uint32_t const k_running_average_count = 100;
+uint32_t running_average_count = 100;
+uint32_t period_sum = 0;
+uint32_t last_period_sum = 0;
 
 static void read_adc(void)
 {
@@ -263,44 +263,55 @@ static void read_adc(void)
   adc_read_ticks = nrf_drv_timer_capture(&TIMER_LED, NRF_TIMER_CC_CHANNEL2);
   adc_read_ticks_diff = adc_read_ticks - adc_read_ticks_last;
   adc_read_ticks_last = adc_read_ticks;
-  running_average = 999*running_average + adc_read_ticks_diff;
-  running_average /= 1000;
-  ++jitter_counter;
 
-  uint32_t const k_bangon = 2930;
-  uint32_t const k_1_percent = k_bangon / 100;
+  if (!firstTime) {
+    ticks_sum += adc_read_ticks_diff;
+    ++counter;
 
-  if (adc_read_ticks_diff <= k_bangon - 100 * k_1_percent)
-  {
-    ++jitter_bin_1;
+    period_sum += adc_read_ticks_diff;
+    --running_average_count;
+    if (!running_average_count) {
+      running_average_count = k_running_average_count;
+      last_period_sum = period_sum;
+      period_sum = 0;
+    }
+
+
+   if (adc_read_ticks_diff <= k_bangon - 100 * k_bangon / 100)
+    {
+      ++jitter_bin[1];
+    }
+    else if (adc_read_ticks_diff <= k_bangon -  50 * k_bangon / 100)
+    {
+      ++jitter_bin[2];
+    }
+    else if (adc_read_ticks_diff <= k_bangon - 25 * k_bangon / 100)
+    {
+      ++jitter_bin[3];
+    }
+    else if (k_bangon -  25*k_bangon / 100 <= adc_read_ticks_diff && adc_read_ticks_diff <= k_bangon + 25*k_bangon / 100)
+    {
+      ++jitter_bin[0];
+      ++no_jitter_counter;
+    }
+    else if (k_bangon + 100*k_bangon / 100 < adc_read_ticks_diff)
+    {
+      ++jitter_bin[6];
+    }
+    else if (k_bangon + 50*k_bangon / 100 < adc_read_ticks_diff)
+    {
+      ++jitter_bin[5];
+    }
+    else if (k_bangon + 25*k_bangon / 100 < adc_read_ticks_diff)
+    {
+      ++jitter_bin[4];
+    }
+    else
+    {}
+  } else {
+    firstTime = false;
   }
-  else if (adc_read_ticks_diff <= k_bangon -  50 * k_1_percent)
-  {
-    ++jitter_bin_2;
-  }
-  else if (adc_read_ticks_diff <= k_bangon - 25 * k_1_percent)
-  {
-    ++jitter_bin_3;
-  }
-  else if (k_bangon -  25*k_1_percent <= adc_read_ticks_diff && adc_read_ticks_diff <= k_bangon + 25*k_1_percent)
-  {
-    ++jitter_bin_0;
-    ++no_jitter_counter;
-  }
-  else if (k_bangon + 100*k_1_percent < adc_read_ticks_diff)
-  {
-    ++jitter_bin_6;
-  }
-  else if (k_bangon + 50*k_1_percent < adc_read_ticks_diff)
-  {
-    ++jitter_bin_5;
-  }
-  else if (k_bangon + 25*k_1_percent < adc_read_ticks_diff)
-  {
-    ++jitter_bin_4;
-  }
-  else
-  {}
+
 
 
   APP_ERROR_CHECK(nrf_drv_spi_transfer(&m_spi, m_tx_buf, m_length, m_rx_buf, m_length));
@@ -963,10 +974,16 @@ int main(void)
     for (;;)
     {
       NRF_LOG_INFO("[<100%]\t[ 100-50%]\t[  50-25%]\t[  +/-25%]\t[  25-50%]\t[ 50-100%]\t[   >100%]\n");
-      NRF_LOG_INFO("[    ?]\t[%8u]\t[%8u]\t[%8u]\t[%8u]\t[%8u]\t[%8u]\n", /*itter_bin_1,*/ jitter_bin_2, jitter_bin_3, jitter_bin_0, jitter_bin_4, jitter_bin_5, jitter_bin_6);
-      const uint32_t total = jitter_bin_2 + jitter_bin_3 + jitter_bin_0 + jitter_bin_4 + jitter_bin_5 + jitter_bin_6;
+      NRF_LOG_INFO("[    ?]\t[%8u]\t[%8u]\t[%8u]\t[%8u]\t[%8u]\t[%8u]\n", /*itter_bin_1,*/ jitter_bin[2], jitter_bin[3], jitter_bin[0], jitter_bin[4], jitter_bin[5], jitter_bin[6]);
+      const uint32_t total = jitter_bin[0] + jitter_bin[1] + jitter_bin[2] + jitter_bin[3] + jitter_bin[4] + jitter_bin[5] + jitter_bin[6];
       NRF_LOG_INFO("[    ?]\t[%7d%%]\t[%7d%%]\t[%7d%%]\t[%7d%%]\t[%7d%%]\t[%7d%%]\n", /*itter_bin_1,*/
-       (int)(10000.0f*jitter_bin_2/total), (int)(10000.0f*jitter_bin_3/total), (int)(10000.0f*jitter_bin_0/total), (int)(10000.0f*jitter_bin_4/total), (int)(10000.0f*jitter_bin_5/total), (int)(10000.0f*jitter_bin_6/total));
+        (int)(10000.0f*jitter_bin[2]/total),
+        (int)(10000.0f*jitter_bin[3]/total),
+        (int)(10000.0f*jitter_bin[0]/total),
+        (int)(10000.0f*jitter_bin[4]/total),
+        (int)(10000.0f*jitter_bin[5]/total),
+        (int)(10000.0f*jitter_bin[6]/total));
+      NRF_LOG_INFO("Avg period %u ticks %u us, average %u ticks over last %u samples\n", (uint32_t)(ticks_sum/counter), (uint32_t)(ticks_sum/counter/16), (int32_t)(1.0f*last_period_sum/k_running_average_count), k_running_average_count);
       nrf_delay_ms(1000);
       // power_manage();
     }
